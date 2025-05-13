@@ -29,10 +29,11 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Vérification de la signature
+    // Vérification de la signature (avec méthode asynchrone)
     let event;
     try {
-      event = stripe.webhooks.constructEvent(body, signature, webhookSecret);
+      // Utiliser constructEventAsync au lieu de constructEvent
+      event = await stripe.webhooks.constructEventAsync(body, signature, webhookSecret);
     } catch (err) {
       // Vérifier le type d'erreur avant d'accéder à la propriété message
       const errorMessage = err instanceof Error ? err.message : 'Erreur inconnue';
