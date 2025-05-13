@@ -2,16 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { headers } from 'next/headers';
 import { stripe } from '@/lib/stripe';
 import { grantEntitlementToUser, revokeEntitlementFromUser } from '@/lib/revenuecat';
-import { Readable } from 'stream';
-
-// Conversion d'un flux de données en chaîne
-async function buffer(readable: Readable) {
-  const chunks = [];
-  for await (const chunk of readable) {
-    chunks.push(typeof chunk === 'string' ? Buffer.from(chunk) : chunk);
-  }
-  return Buffer.concat(chunks);
-}
+import Stripe from 'stripe';
 
 // Fonction utilitaire pour mapper les produits Stripe aux entitlements
 function mapStripeProductToEntitlement(productId: string): string {
@@ -26,7 +17,8 @@ function mapStripeProductToEntitlement(productId: string): string {
 export async function POST(req: NextRequest) {
   try {
     const body = await req.text();
-    const signature = headers().get('stripe-signature') as string;
+    const headersList = await headers();
+    const signature = headersList.get('stripe-signature') as string;
     const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET as string;
 
     if (!signature || !webhookSecret) {
@@ -41,10 +33,12 @@ export async function POST(req: NextRequest) {
     let event;
     try {
       event = stripe.webhooks.constructEvent(body, signature, webhookSecret);
-    } catch (err: any) {
-      console.error(`❌ Erreur de signature webhook: ${err.message}`);
+    } catch (err) {
+      // Vérifier le type d'erreur avant d'accéder à la propriété message
+      const errorMessage = err instanceof Error ? err.message : 'Erreur inconnue';
+      console.error(`❌ Erreur de signature webhook: ${errorMessage}`);
       return NextResponse.json(
-        { error: `Signature webhook: ${err.message}` },
+        { error: `Signature webhook: ${errorMessage}` },
         { status: 400 }
       );
     }
@@ -54,13 +48,13 @@ export async function POST(req: NextRequest) {
     // Traitement des événements
     switch (event.type) {
       case 'payment_intent.succeeded':
-        await handlePaymentIntentSucceeded(event.data.object);
+        await handlePaymentIntentSucceeded(event.data.object as Stripe.PaymentIntent);
         break;
       case 'payment_intent.payment_failed':
-        await handlePaymentIntentFailed(event.data.object);
+        await handlePaymentIntentFailed(event.data.object as Stripe.PaymentIntent);
         break;
       case 'charge.refunded':
-        await handleChargeRefunded(event.data.object);
+        await handleChargeRefunded(event.data.object as Stripe.Charge);
         break;
       default:
         console.log(`⚠️ Événement non géré: ${event.type}`);
@@ -79,7 +73,7 @@ export async function POST(req: NextRequest) {
 /**
  * Gère un paiement réussi - Accorde l'entitlement à l'utilisateur
  */
-async function handlePaymentIntentSucceeded(paymentIntent: any) {
+async function handlePaymentIntentSucceeded(paymentIntent: Stripe.PaymentIntent) {
   try {
     console.log('✅ Paiement réussi:', paymentIntent.id);
     
@@ -88,7 +82,7 @@ async function handlePaymentIntentSucceeded(paymentIntent: any) {
     // Récupérer les données importantes des métadonnées
     const appUserId = metadata.app_user_id;
     const productId = metadata.product_id;
-    const entitlement = metadata.entitlement || mapStripeProductToEntitlement(productId);
+    const entitlement = metadata.entitlement || mapStripeProductToEntitlement(productId as string);
     
     if (!appUserId) {
       console.error('❌ app_user_id manquant dans les métadonnées du paiement');
@@ -103,7 +97,7 @@ async function handlePaymentIntentSucceeded(paymentIntent: any) {
     console.log(`🔄 Traitement de l'entitlement "${entitlement}" pour l'utilisateur "${appUserId}"`);
     
     // Accorder l'entitlement à l'utilisateur dans RevenueCat
-    const success = await grantEntitlementToUser(appUserId, entitlement, productId);
+    const success = await grantEntitlementToUser(appUserId as string, entitlement as string, productId as string);
     
     if (success) {
       console.log('✅ Entitlement accordé avec succès');
@@ -118,7 +112,7 @@ async function handlePaymentIntentSucceeded(paymentIntent: any) {
 /**
  * Gère un paiement échoué
  */
-async function handlePaymentIntentFailed(paymentIntent: any) {
+async function handlePaymentIntentFailed(paymentIntent: Stripe.PaymentIntent) {
   console.log('❌ Paiement échoué:', paymentIntent.id);
   // Pas d'action spécifique nécessaire car aucun entitlement n'a été accordé
 }
@@ -126,7 +120,7 @@ async function handlePaymentIntentFailed(paymentIntent: any) {
 /**
  * Gère un remboursement - Révoque l'entitlement de l'utilisateur
  */
-async function handleChargeRefunded(charge: any) {
+async function handleChargeRefunded(charge: Stripe.Charge) {
   try {
     console.log('💸 Remboursement détecté:', charge.id);
     
@@ -138,12 +132,13 @@ async function handleChargeRefunded(charge: any) {
     }
     
     // Récupérer les détails du payment intent
-    const paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
+    const paymentIntentId_str = typeof paymentIntentId === 'string' ? paymentIntentId : paymentIntentId.id;
+    const paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId_str);
     const metadata = paymentIntent.metadata || {};
     
     const appUserId = metadata.app_user_id;
     const productId = metadata.product_id;
-    const entitlement = metadata.entitlement || mapStripeProductToEntitlement(productId);
+    const entitlement = metadata.entitlement || mapStripeProductToEntitlement(productId as string);
     
     if (!appUserId) {
       console.error('❌ app_user_id manquant dans les métadonnées du paiement');
@@ -158,7 +153,7 @@ async function handleChargeRefunded(charge: any) {
     console.log(`🔄 Révocation de l'entitlement "${entitlement}" pour l'utilisateur "${appUserId}" suite à un remboursement`);
     
     // Révoquer l'entitlement de l'utilisateur dans RevenueCat
-    const success = await revokeEntitlementFromUser(appUserId, entitlement);
+    const success = await revokeEntitlementFromUser(appUserId as string, entitlement as string);
     
     if (success) {
       console.log('✅ Entitlement révoqué avec succès');
@@ -170,7 +165,11 @@ async function handleChargeRefunded(charge: any) {
   }
 }
 
-// Configuration pour les options de header HTTP de la route
-export const OPTIONS = {
-  runtime: 'edge',
-}; 
+// Remplacer l'exportation OPTIONS incorrecte par la bonne configuration
+export const runtime = 'edge';
+
+// Gérer les requêtes OPTIONS pour CORS
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+export async function OPTIONS(_req: NextRequest) {
+  return NextResponse.json({}, { status: 200 });
+} 

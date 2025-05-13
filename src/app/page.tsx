@@ -1,4 +1,5 @@
-import Image from "next/image";
+// Retirer l'import Image non utilisé
+// import Image from "next/image";
 
 export default function Home() {
   return (
@@ -29,7 +30,7 @@ export default function Home() {
         
         <div className="p-4 mb-8 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-900 rounded-lg">
           <p className="text-center text-green-700 dark:text-green-400">
-            Le webhook est actif et en attente d'événements Stripe
+            Le webhook est actif et en attente d&apos;événements Stripe
           </p>
         </div>
         
